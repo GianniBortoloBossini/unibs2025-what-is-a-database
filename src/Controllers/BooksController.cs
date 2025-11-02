@@ -1,74 +1,61 @@
-using System.Data;
+using LibraryAPI.Models;
+using LibraryAPI.Services.Interfaces;
+using Microsoft.AspNetCore.Mvc;
 
 namespace LibraryAPI.Controllers;
 
+/// <summary>
+/// ✅ SOLUZIONE: Controller refactorizzato che usa il Repository Pattern
+/// - Dipende solo dall'interfaccia IBookService
+/// - Non conosce dettagli del database
+/// - Facilmente testabile
+/// - Separazione delle responsabilità: solo gestione HTTP
+/// </summary>
 [ApiController]
 [Route("api/[controller]")]
 public class BooksController : ControllerBase
 {
-    private readonly IConfiguration _configuration;
-    private readonly string _databaseType;
-    private readonly string _connectionString;
+    private readonly IBookService _bookService;
+    private readonly ILogger<BooksController> _logger;
 
-    public BooksController(IConfiguration configuration)
+    public BooksController(IBookService bookService, ILogger<BooksController> logger)
     {
-        _configuration = configuration;
-        _databaseType = _configuration["DatabaseSettings:Type"] ?? "SqlServer";
-        _connectionString = _configuration.GetConnectionString(_databaseType) ?? 
-            throw new InvalidOperationException($"Connection string '{_databaseType}' not found.");
+        _bookService = bookService ?? throw new ArgumentNullException(nameof(bookService));
+        _logger = logger ?? throw new ArgumentNullException(nameof(logger));
     }
 
-    // ❌ PROBLEMA: Accesso diretto al database nel controller
-    // ❌ PROBLEMA: Logica di business mista con logica di accesso ai dati
-    // ❌ PROBLEMA: Difficile da testare
+    /// <summary>
+    /// ✅ SOLUZIONE: Controller pulito che delega al service layer
+    /// - Nessuna logica di business nel controller
+    /// - Nessun accesso diretto al database
+    /// - Facile da testare
+    /// </summary>
     [HttpGet]
     public async Task<ActionResult<IEnumerable<Book>>> GetAllBooks()
     {
         try
         {
-            using var connection = CreateConnection();
-            
-            // ❌ PROBLEMA: Query SQL embedded nel controller con gestione naming specifico per database
-            string sql;
-            if (_databaseType == "PostgreSQL")
-            {
-                sql = "SELECT id, title, author, isbn, published_date, genre, available_copies, price FROM books";
-            }
-            else
-            {
-                sql = "SELECT Id, Title, Author, ISBN, PublishedDate, Genre, AvailableCopies, Price FROM Books";
-            }
-            
-            var books = await connection.QueryAsync<Book>(sql);
+            _logger.LogInformation("Getting all books");
+            var books = await _bookService.GetAllBooksAsync();
             return Ok(books);
         }
         catch (Exception ex)
         {
-            // ❌ PROBLEMA: Gestione errori database nel controller
-            return StatusCode(500, $"Database error: {ex.Message}");
+            _logger.LogError(ex, "Error occurred while getting all books");
+            return StatusCode(500, "An internal server error occurred");
         }
     }
 
-    // ❌ PROBLEMA: Codice duplicato per la connessione al database
+    /// <summary>
+    /// ✅ SOLUZIONE: Endpoint semplificato che delega al service
+    /// </summary>
     [HttpGet("{id}")]
     public async Task<ActionResult<Book>> GetBook(int id)
     {
         try
         {
-            using var connection = CreateConnection();
-            
-            // ❌ PROBLEMA: Query SQL con parametri hardcoded e gestione naming specifico per database
-            string sql;
-            if (_databaseType == "PostgreSQL")
-            {
-                sql = "SELECT id, title, author, isbn, published_date, genre, available_copies, price FROM books WHERE id = @Id";
-            }
-            else
-            {
-                sql = "SELECT Id, Title, Author, ISBN, PublishedDate, Genre, AvailableCopies, Price FROM Books WHERE Id = @Id";
-            }
-            
-            var book = await connection.QuerySingleOrDefaultAsync<Book>(sql, new { Id = id });
+            _logger.LogInformation("Getting book with ID: {BookId}", id);
+            var book = await _bookService.GetBookByIdAsync(id);
             
             if (book == null)
                 return NotFound();
@@ -77,275 +64,181 @@ public class BooksController : ControllerBase
         }
         catch (Exception ex)
         {
-            return StatusCode(500, $"Database error: {ex.Message}");
+            _logger.LogError(ex, "Error occurred while getting book with ID: {BookId}", id);
+            return StatusCode(500, "An internal server error occurred");
         }
     }
 
-    // ❌ PROBLEMA: Logica di business nel controller (validazione, trasformazione dati)
+    /// <summary>
+    /// ✅ SOLUZIONE: Ricerca che delega validazione e logica al service layer
+    /// </summary>
     [HttpGet("search")]
     public async Task<ActionResult<IEnumerable<Book>>> SearchBooks([FromQuery] string? title, [FromQuery] string? author)
     {
-        if (string.IsNullOrWhiteSpace(title) && string.IsNullOrWhiteSpace(author))
-            return BadRequest("Either title or author must be provided for search.");
-
         try
         {
-            using var connection = CreateConnection();
+            _logger.LogInformation("Searching books with title: '{Title}', author: '{Author}'", 
+                title ?? "N/A", author ?? "N/A");
             
-            // ❌ PROBLEMA: Costruzione dinamica di query SQL nel controller con naming specifico per database
-            string sql;
-            if (_databaseType == "PostgreSQL")
+            var result = await _bookService.SearchBooksAsync(title, author);
+            
+            if (!result.IsSuccess)
             {
-                sql = "SELECT id, title, author, isbn, published_date, genre, available_copies, price FROM books WHERE 1=1";
-            }
-            else
-            {
-                sql = "SELECT Id, Title, Author, ISBN, PublishedDate, Genre, AvailableCopies, Price FROM Books WHERE 1=1";
+                if (result.ValidationErrors.Any())
+                {
+                    return BadRequest(new { 
+                        Message = result.ErrorMessage,
+                        ValidationErrors = result.ValidationErrors 
+                    });
+                }
+                return StatusCode(500, new { Message = result.ErrorMessage });
             }
             
-            var parameters = new DynamicParameters();
-
-            if (!string.IsNullOrWhiteSpace(title))
-            {
-                if (_databaseType == "PostgreSQL")
-                {
-                    sql += " AND title ILIKE @Title"; // PostgreSQL case-insensitive
-                }
-                else
-                {
-                    sql += " AND Title LIKE @Title";
-                }
-                parameters.Add("Title", $"%{title}%");
-            }
-
-            if (!string.IsNullOrWhiteSpace(author))
-            {
-                if (_databaseType == "PostgreSQL")
-                {
-                    sql += " AND author ILIKE @Author"; // PostgreSQL case-insensitive
-                }
-                else
-                {
-                    sql += " AND Author LIKE @Author";
-                }
-                parameters.Add("Author", $"%{author}%");
-            }
-
-            var books = await connection.QueryAsync<Book>(sql, parameters);
-            return Ok(books);
+            return Ok(result.Data);
         }
         catch (Exception ex)
         {
-            return StatusCode(500, $"Database error: {ex.Message}");
+            _logger.LogError(ex, "Error occurred while searching books");
+            return StatusCode(500, "An internal server error occurred");
         }
     }
 
-    // ❌ PROBLEMA: Validazione business rules nel controller
+    /// <summary>
+    /// ✅ SOLUZIONE: Creazione che delega validazione e business logic al service
+    /// </summary>
     [HttpPost]
     public async Task<ActionResult<Book>> CreateBook(Book book)
     {
-        // ❌ PROBLEMA: Validazione business logic nel controller
-        if (string.IsNullOrWhiteSpace(book.Title) || string.IsNullOrWhiteSpace(book.Author))
-            return BadRequest("Title and Author are required.");
-
-        if (book.AvailableCopies < 0)
-            return BadRequest("Available copies cannot be negative.");
-
         try
         {
-            using var connection = CreateConnection();
+            _logger.LogInformation("Creating new book: {Title} by {Author}", book.Title, book.Author);
             
-            // ❌ PROBLEMA: Controllo duplicati nel controller con naming specifico per database
-            string checkSql;
-            if (_databaseType == "PostgreSQL")
-            {
-                checkSql = "SELECT COUNT(*) FROM books WHERE isbn = @ISBN";
-            }
-            else
-            {
-                checkSql = "SELECT COUNT(*) FROM Books WHERE ISBN = @ISBN";
-            }
-            var existingCount = await connection.QuerySingleAsync<int>(checkSql, new { book.ISBN });
+            var result = await _bookService.CreateBookAsync(book);
             
-            if (existingCount > 0)
-                return BadRequest("A book with this ISBN already exists.");
-
-            // ❌ PROBLEMA: SQL di inserimento specifico per database nel controller con naming conventions diverse
-            string sql;
-            if (_databaseType == "SqlServer")
+            if (!result.IsSuccess)
             {
-                sql = @"INSERT INTO Books (Title, Author, ISBN, PublishedDate, Genre, AvailableCopies, Price) 
-                       OUTPUT INSERTED.Id
-                       VALUES (@Title, @Author, @ISBN, @PublishedDate, @Genre, @AvailableCopies, @Price)";
+                if (result.ValidationErrors.Any())
+                {
+                    return BadRequest(new { 
+                        Message = result.ErrorMessage,
+                        ValidationErrors = result.ValidationErrors 
+                    });
+                }
+                return StatusCode(500, new { Message = result.ErrorMessage });
             }
-            else if (_databaseType == "PostgreSQL")
-            {
-                sql = @"INSERT INTO books (title, author, isbn, published_date, genre, available_copies, price) 
-                       VALUES (@Title, @Author, @ISBN, @PublishedDate, @Genre, @AvailableCopies, @Price)
-                       RETURNING id";
-            }
-            else // SQLite
-            {
-                sql = @"INSERT INTO Books (Title, Author, ISBN, PublishedDate, Genre, AvailableCopies, Price) 
-                       VALUES (@Title, @Author, @ISBN, @PublishedDate, @Genre, @AvailableCopies, @Price);
-                       SELECT last_insert_rowid()";
-            }
-
-            var newId = await connection.QuerySingleAsync<int>(sql, book);
-            book.Id = newId;
             
-            return CreatedAtAction(nameof(GetBook), new { id = newId }, book);
+            return CreatedAtAction(nameof(GetBook), new { id = result.Data!.Id }, result.Data);
         }
         catch (Exception ex)
         {
-            return StatusCode(500, $"Database error: {ex.Message}");
+            _logger.LogError(ex, "Error occurred while creating book");
+            return StatusCode(500, "An internal server error occurred");
         }
     }
 
-    // ❌ PROBLEMA: Stessa logica di validazione ripetuta
+    /// <summary>
+    /// ✅ SOLUZIONE: Aggiornamento che delega al service layer
+    /// </summary>
     [HttpPut("{id}")]
     public async Task<IActionResult> UpdateBook(int id, Book book)
     {
-        if (id != book.Id)
-            return BadRequest("ID mismatch.");
-
-        // ❌ PROBLEMA: Validazione duplicata in ogni metodo
-        if (string.IsNullOrWhiteSpace(book.Title) || string.IsNullOrWhiteSpace(book.Author))
-            return BadRequest("Title and Author are required.");
-
-        if (book.AvailableCopies < 0)
-            return BadRequest("Available copies cannot be negative.");
-
         try
         {
-            using var connection = CreateConnection();
+            _logger.LogInformation("Updating book with ID: {BookId}", id);
             
-            // ❌ PROBLEMA: Controllo esistenza nel controller con naming specifico per database
-            string checkSql;
-            if (_databaseType == "PostgreSQL")
-            {
-                checkSql = "SELECT COUNT(*) FROM books WHERE id = @Id";
-            }
-            else
-            {
-                checkSql = "SELECT COUNT(*) FROM Books WHERE Id = @Id";
-            }
-            var exists = await connection.QuerySingleAsync<int>(checkSql, new { Id = id }) > 0;
+            var result = await _bookService.UpdateBookAsync(id, book);
             
-            if (!exists)
-                return NotFound();
-
-            // ❌ PROBLEMA: Query SQL di aggiornamento nel controller con naming specifico per database
-            string sql;
-            if (_databaseType == "PostgreSQL")
+            if (!result.IsSuccess)
             {
-                sql = @"UPDATE books 
-                       SET title = @Title, author = @Author, isbn = @ISBN, 
-                           published_date = @PublishedDate, genre = @Genre, 
-                           available_copies = @AvailableCopies, price = @Price
-                       WHERE id = @Id";
+                if (result.ErrorMessage == "Book not found.")
+                {
+                    return NotFound();
+                }
+                
+                if (result.ValidationErrors.Any())
+                {
+                    return BadRequest(new { 
+                        Message = result.ErrorMessage,
+                        ValidationErrors = result.ValidationErrors 
+                    });
+                }
+                
+                return StatusCode(500, new { Message = result.ErrorMessage });
             }
-            else
-            {
-                sql = @"UPDATE Books 
-                       SET Title = @Title, Author = @Author, ISBN = @ISBN, 
-                           PublishedDate = @PublishedDate, Genre = @Genre, 
-                           AvailableCopies = @AvailableCopies, Price = @Price
-                       WHERE Id = @Id";
-            }
-
-            await connection.ExecuteAsync(sql, book);
+            
             return NoContent();
         }
         catch (Exception ex)
         {
-            return StatusCode(500, $"Database error: {ex.Message}");
+            _logger.LogError(ex, "Error occurred while updating book with ID: {BookId}", id);
+            return StatusCode(500, "An internal server error occurred");
         }
     }
 
+    /// <summary>
+    /// ✅ SOLUZIONE: Eliminazione che delega business logic al service
+    /// </summary>
     [HttpDelete("{id}")]
     public async Task<IActionResult> DeleteBook(int id)
     {
         try
         {
-            using var connection = CreateConnection();
+            _logger.LogInformation("Deleting book with ID: {BookId}", id);
             
-            // ❌ PROBLEMA: Logica business (controllo prestiti) nel controller con naming specifico per database
-            string checkLoansSql;
-            if (_databaseType == "PostgreSQL")
-            {
-                checkLoansSql = "SELECT COUNT(*) FROM book_loans WHERE book_id = @Id AND returned_date IS NULL";
-            }
-            else
-            {
-                checkLoansSql = "SELECT COUNT(*) FROM BookLoans WHERE BookId = @Id AND ReturnedDate IS NULL";
-            }
-            var activeLoans = await connection.QuerySingleAsync<int>(checkLoansSql, new { Id = id });
+            var result = await _bookService.DeleteBookAsync(id);
             
-            if (activeLoans > 0)
-                return BadRequest("Cannot delete book with active loans.");
-
-            // ❌ PROBLEMA: Query di cancellazione nel controller con naming specifico per database
-            string sql;
-            if (_databaseType == "PostgreSQL")
+            if (!result.IsSuccess)
             {
-                sql = "DELETE FROM books WHERE id = @Id";
+                if (result.ErrorMessage == "Book not found.")
+                {
+                    return NotFound();
+                }
+                
+                if (result.ValidationErrors.Any())
+                {
+                    return BadRequest(new { 
+                        Message = result.ErrorMessage,
+                        ValidationErrors = result.ValidationErrors 
+                    });
+                }
+                
+                return StatusCode(500, new { Message = result.ErrorMessage });
             }
-            else
-            {
-                sql = "DELETE FROM Books WHERE Id = @Id";
-            }
-            var affected = await connection.ExecuteAsync(sql, new { Id = id });
-
-            if (affected == 0)
-                return NotFound();
-
+            
             return NoContent();
         }
         catch (Exception ex)
         {
-            return StatusCode(500, $"Database error: {ex.Message}");
+            _logger.LogError(ex, "Error occurred while deleting book with ID: {BookId}", id);
+            return StatusCode(500, "An internal server error occurred");
         }
-    }
-
-    // ❌ PROBLEMA: Factory pattern nel controller invece che in un servizio dedicato
-    // ❌ PROBLEMA: Logica di connessione database nel controller
-    private IDbConnection CreateConnection()
-    {
-        return _databaseType switch
-        {
-            "SqlServer" => new SqlConnection(_connectionString),
-            "PostgreSQL" => new NpgsqlConnection(_connectionString),
-            "SQLite" => new SqliteConnection(_connectionString),
-            _ => throw new InvalidOperationException($"Unsupported database type: {_databaseType}")
-        };
     }
 }
 
 /*
- * ❌ PROBLEMI EVIDENZIATI IN QUESTO CONTROLLER:
+ * ✅ VANTAGGI DEL CONTROLLER REFACTORIZZATO:
  * 
- * 1. VIOLAZIONE SINGLE RESPONSIBILITY PRINCIPLE
- *    - Il controller gestisce HTTP requests E accesso al database
+ * 1. SINGLE RESPONSIBILITY PRINCIPLE
+ *    - Il controller gestisce SOLO le HTTP requests
+ *    - La logica di business è nel service layer
  * 
- * 2. ACCOPPIAMENTO FORTE
- *    - Dipendenza diretta da Dapper e specifici database provider
- *    - Difficile cambiare database senza modificare il controller
+ * 2. DISACCOPPIAMENTO
+ *    - Nessuna dipendenza diretta dal database
+ *    - Facilmente sostituibile e testabile
  * 
- * 3. CODICE DUPLICATO
- *    - Logica di connessione ripetuta in ogni metodo
- *    - Validazioni duplicate
- *    - Gestione errori ripetitiva
+ * 3. ELIMINAZIONE CODICE DUPLICATO
+ *    - Logica centralizzata nel service
+ *    - Validazioni uniche e riutilizzabili
  * 
- * 4. DIFFICOLTÀ NEI TEST
- *    - Impossibile testare senza database reale
- *    - Non si possono mockare facilmente le dipendenze
+ * 4. TESTABILITÀ
+ *    - Facile da mockare le dipendenze
+ *    - Test unitari isolati e veloci
  * 
- * 5. MANUTENIBILITÀ SCARSA
- *    - Query SQL sparse in tutto il controller
- *    - Business logic mista con data access logic
+ * 5. MANUTENIBILITÀ
+ *    - Codice pulito e leggibile
+ *    - Separazione chiara delle responsabilità
  * 
- * 6. SCALABILITÀ LIMITATA
- *    - Aggiungere nuovo database richiede modifiche al controller
- *    - Impossibile riutilizzare la logica in altri contesti
+ * 6. SCALABILITÀ
+ *    - Facile aggiungere nuovi database
+ *    - Service layer riutilizzabile in altri contesti
  */
