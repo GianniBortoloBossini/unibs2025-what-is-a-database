@@ -81,7 +81,7 @@ Per testare diversi database, modifica il file `appsettings.json`:
 
 Dopo aver modificato la configurazione, riavvia il container:
 ```bash
-docker-compose restart library-api
+docker-compose up library-api --build -d
 ```
 
 ## 🔍 Verifica Database

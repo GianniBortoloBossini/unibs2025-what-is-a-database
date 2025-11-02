@@ -1,10 +1,4 @@
-using Microsoft.AspNetCore.Mvc;
-using LibraryAPI.Models;
-using Dapper;
 using System.Data;
-using Microsoft.Data.SqlClient;
-using Npgsql;
-using Microsoft.Data.Sqlite;
 
 namespace LibraryAPI.Controllers;
 
