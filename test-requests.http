@@ -1,0 +1,125 @@
+### Library API - Test Requests
+### Branch: 1-myfirstlibrary (SENZA Repository Pattern)
+
+### Variables
+@baseUrl = http://localhost:5000
+
+### 1. Get all books
+GET {{baseUrl}}/api/books
+Accept: application/json
+
+### 2. Get book by ID
+GET {{baseUrl}}/api/books/1
+Accept: application/json
+
+### 3. Get book by ID (not found)
+GET {{baseUrl}}/api/books/999
+Accept: application/json
+
+### 4. Search books by title
+GET {{baseUrl}}/api/books/search?title=gatsby
+Accept: application/json
+
+### 5. Search books by author
+GET {{baseUrl}}/api/books/search?author=orwell
+Accept: application/json
+
+### 6. Search books by title and author
+GET {{baseUrl}}/api/books/search?title=code&author=martin
+Accept: application/json
+
+### 7. Create new book
+POST {{baseUrl}}/api/books
+Content-Type: application/json
+
+{
+    "title": "Domain-Driven Design",
+    "author": "Eric Evans",
+    "isbn": "978-0-321-12521-7",
+    "publishedDate": "2003-08-20T00:00:00",
+    "genre": "Technology",
+    "availableCopies": 3,
+    "price": 59.99
+}
+
+### 8. Create book with duplicate ISBN (should fail)
+POST {{baseUrl}}/api/books
+Content-Type: application/json
+
+{
+    "title": "Duplicate ISBN Test",
+    "author": "Test Author",
+    "isbn": "978-0-7432-7356-5",
+    "publishedDate": "2024-01-01T00:00:00",
+    "genre": "Test",
+    "availableCopies": 1,
+    "price": 9.99
+}
+
+### 9. Create book with invalid data (should fail)
+POST {{baseUrl}}/api/books
+Content-Type: application/json
+
+{
+    "title": "",
+    "author": "Test Author",
+    "isbn": "978-1-111-11111-1",
+    "publishedDate": "2024-01-01T00:00:00",
+    "genre": "Test",
+    "availableCopies": -1,
+    "price": 9.99
+}
+
+### 10. Update existing book
+PUT {{baseUrl}}/api/books/1
+Content-Type: application/json
+
+{
+    "id": 1,
+    "title": "The Great Gatsby - Updated Edition",
+    "author": "F. Scott Fitzgerald",
+    "isbn": "978-0-7432-7356-5",
+    "publishedDate": "1925-04-10T00:00:00",
+    "genre": "Classic Fiction",
+    "availableCopies": 8,
+    "price": 15.99
+}
+
+### 11. Update non-existing book (should fail)
+PUT {{baseUrl}}/api/books/999
+Content-Type: application/json
+
+{
+    "id": 999,
+    "title": "Non Existing Book",
+    "author": "Unknown Author",
+    "isbn": "978-9-999-99999-9",
+    "publishedDate": "2024-01-01T00:00:00",
+    "genre": "Test",
+    "availableCopies": 1,
+    "price": 9.99
+}
+
+### 12. Delete book (first check which books have no active loans)
+DELETE {{baseUrl}}/api/books/8
+
+### 13. Try to delete book with active loans (should fail)
+DELETE {{baseUrl}}/api/books/2
+
+### 14. Delete non-existing book (should fail)
+DELETE {{baseUrl}}/api/books/999
+
+###
+### Nota per gli studenti:
+### 
+### Osservate come tutte queste operazioni sono gestite direttamente nel controller.
+### Nel prossimo branch (2-mysecondlibrary) vedremo come il Repository Pattern
+### può migliorare l'architettura separando le responsabilità.
+###
+### Problemi evidenti:
+### 1. Logica di business nel controller (validazioni, controlli duplicati)
+### 2. Query SQL embedded nel controller
+### 3. Gestione errori database nel controller
+### 4. Impossibilità di testare senza database reale
+### 5. Accoppiamento forte con Dapper e database specifici
+###
